@@ -1,0 +1,58 @@
+name: Omni PLE lifecycle regression
+
+on:
+  push:
+    branches:
+      - ci/omni-ple-lifecycle
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore the pre-fix implementation
+        run: git apply --reverse .github/workflows/omni-ple-refresh.patch
+
+      - name: Build the regression test without the fix
+        run: |
+          cmake -S . -B build-before \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMNN_BUILD_LLM=ON \
+            -DMNN_LLM_BUILD_TEST=ON \
+            -DMNN_LLM_BUILD_DEMO=OFF \
+            -DLLM_SUPPORT_HTTP_RESOURCE=OFF
+          cmake --build build-before --target test_omni_ple_lifecycle --parallel 4
+
+      - name: Confirm the test detects the stale PLE
+        shell: bash
+        run: |
+          set +e
+          output=$(./build-before/test_omni_ple_lifecycle 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -eq 0 ]; then
+            echo "Regression test unexpectedly passed without the fix"
+            exit 1
+          fi
+          grep -F "Text prefill reused the stale one-token PLE input" <<< "$output"
+
+      - name: Restore the fix
+        run: git apply .github/workflows/omni-ple-refresh.patch
+
+      - name: Build the regression test with the fix
+        run: |
+          cmake -S . -B build-after \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMNN_BUILD_LLM=ON \
+            -DMNN_LLM_BUILD_TEST=ON \
+            -DMNN_LLM_BUILD_DEMO=OFF \
+            -DLLM_SUPPORT_HTTP_RESOURCE=OFF
+          cmake --build build-after --target test_omni_ple_lifecycle --parallel 4
+
+      - name: Confirm the fixed lifecycle passes
+        run: ./build-after/test_omni_ple_lifecycle
